@@ -4,6 +4,8 @@
 
 A PocketMine-MP plugin that implements support for custom blocks, items and entities.
 
+Add Composer command : composer require customiesdevs/customies or require {"customiesdevs/customies": "dev-main"} in your composer.json and open termial execute command: composer update
+
 ## Community
 
 <a href="https://discord.gg/Tm6wGxWqgh"><img src="https://img.shields.io/discord/989466131305754625?label=discord&color=7289DA&logo=discord" alt="Discord" /></a>
