@@ -7,13 +7,15 @@ use InvalidArgumentException;
 use pocketmine\block\Block;
 use pocketmine\data\bedrock\item\BlockItemIdMap;
 use pocketmine\data\bedrock\item\SavedItemData;
-use pocketmine\inventory\CreativeInventory;
+use pocketmine\inventory\CreativeCategory;
 use pocketmine\item\Item;
 use pocketmine\item\ItemIdentifier;
 use pocketmine\item\ItemTypeIds;
 use pocketmine\item\StringToItemParser;
 use pocketmine\nbt\tag\CompoundTag;
 use pocketmine\network\mcpe\convert\TypeConverter;
+use pocketmine\network\mcpe\protocol\ProtocolInfo;
+use pocketmine\network\mcpe\protocol\serializer\ItemTypeDictionary;
 use pocketmine\network\mcpe\protocol\types\CacheableNbt;
 use pocketmine\network\mcpe\protocol\types\ItemTypeEntry;
 use pocketmine\utils\SingletonTrait;
@@ -21,6 +23,7 @@ use pocketmine\utils\Utils;
 use pocketmine\world\format\io\GlobalItemDataHandlers;
 use ReflectionClass;
 use function array_values;
+use function defined;
 
 final class CustomiesItemFactory {
 	use SingletonTrait;
@@ -29,6 +32,7 @@ final class CustomiesItemFactory {
 	 * @var ItemTypeEntry[]
 	 */
 	private array $itemTableEntries = [];
+
 	/**
 	 * Get a custom item from its identifier. An exception will be thrown if the item is not registered.
 	 */
@@ -41,7 +45,7 @@ final class CustomiesItemFactory {
 	}
 
 	/**
-	 * Returns custom item entries for the StartGamePacket itemTable property.
+	 * Returns custom item entries
 	 * @return ItemTypeEntry[]
 	 */
 	public function getItemTableEntries(): array {
@@ -53,54 +57,60 @@ final class CustomiesItemFactory {
 	 * item components if present.
 	 * @phpstan-param class-string $className
 	 */
-	public function registerItem(string $className, string $identifier, string $name): void {
+	public function registerItem(string $className, string $identifier, string $name, ?CreativeCategory $category = null): void {
 		if($className !== Item::class) {
 			Utils::testValidInstance($className, Item::class);
 		}
 
 		$itemId = ItemTypeIds::newId();
 		$item = new $className(new ItemIdentifier($itemId), $name);
-		$this->registerCustomItemMapping($identifier, $itemId);
 
 		GlobalItemDataHandlers::getDeserializer()->map($identifier, fn() => clone $item);
 		GlobalItemDataHandlers::getSerializer()->map($item, fn() => new SavedItemData($identifier));
 
 		StringToItemParser::getInstance()->register($identifier, fn() => clone $item);
 
-		if(($componentBased = $item instanceof ItemComponents)) {
-			$componentNbt = $item->getComponents()
-				->setInt("id", $itemId)
-				->setString("name", $identifier);
-		} else {
-			$componentNbt = CompoundTag::create();
-		}
+		$nbt = ($componentBased = $item instanceof ItemComponents) ? $item->getComponents()
+			->setInt("id", $itemId)
+			->setString("name", $identifier) : CompoundTag::create();
 
-		$this->itemTableEntries[$identifier] = new ItemTypeEntry(
-			$identifier,
-			$itemId,
-			$componentBased,
-			-1,
-			new CacheableNbt($componentNbt)
-		);
-		CreativeInventory::getInstance()->add($item);
+		$this->itemTableEntries[$identifier] = $entry = new ItemTypeEntry($identifier, $itemId, $componentBased, $componentBased ? 1 : 0, new CacheableNbt($nbt));
+		$this->registerCustomItemMapping($identifier, $itemId, $entry);
+		CreativeItemManager::getInstance()->addItem($item, $category);
 	}
 
 	/**
 	 * Registers a custom item ID to the required mappings in the global ItemTypeDictionary instance.
 	 */
-	private function registerCustomItemMapping(string $identifier, int $itemId): void {
-		$dictionary = TypeConverter::getInstance()->getItemTypeDictionary();
+	private function registerCustomItemMapping(string $stringId, int $id, ItemTypeEntry $entry): void {
+		if(defined(ProtocolInfo::class . "::ACCEPTED_PROTOCOL")){
+			foreach(ProtocolInfo::ACCEPTED_PROTOCOL as $protocol){
+				$this->registerCustomItemMappingToDictionary(TypeConverter::getInstance($protocol)->getItemTypeDictionary(), $stringId, $id, $entry);
+			}
+		}else{
+			$this->registerCustomItemMappingToDictionary(TypeConverter::getInstance()->getItemTypeDictionary(), $stringId, $id, $entry);
+		}
+	}
+
+	private function registerCustomItemMappingToDictionary(ItemTypeDictionary $dictionary, string $identifier, int $itemId, ItemTypeEntry $entry): void {
 		$reflection = new ReflectionClass($dictionary);
 
 		$intToString = $reflection->getProperty("intToStringIdMap");
-		/** @var int[] $value */
+		/** @var string[] $value */
 		$value = $intToString->getValue($dictionary);
-		$intToString->setValue($dictionary, $value + [$itemId => $identifier]);
+		$value[$itemId] = $identifier;
+		$intToString->setValue($dictionary, $value);
 
 		$stringToInt = $reflection->getProperty("stringToIntMap");
 		/** @var int[] $value */
 		$value = $stringToInt->getValue($dictionary);
-		$stringToInt->setValue($dictionary, $value + [$identifier => $itemId]);
+		$value[$identifier] = $itemId;
+		$stringToInt->setValue($dictionary, $value);
+
+		$itemTypes = $reflection->getProperty("itemTypes");
+		$value = $itemTypes->getValue($dictionary);
+		$value[] = $entry;
+		$itemTypes->setValue($dictionary, $value);
 	}
 
 	/**
@@ -109,15 +119,9 @@ final class CustomiesItemFactory {
 	 */
 	public function registerBlockItem(string $identifier, Block $block): void {
 		$itemId = $block->getIdInfo()->getBlockTypeId();
-		$this->registerCustomItemMapping($identifier, $itemId);
 		StringToItemParser::getInstance()->registerBlock($identifier, fn() => clone $block);
-		$this->itemTableEntries[] = new ItemTypeEntry(
-			$identifier,
-			$itemId,
-			false,
-			-1,
-			new CacheableNbt(CompoundTag::create())
-		);
+		$this->itemTableEntries[] = $entry = new ItemTypeEntry($identifier, $itemId, false, 2, new CacheableNbt(CompoundTag::create()));
+		$this->registerCustomItemMapping($identifier, $itemId, $entry);
 
 		$blockItemIdMap = BlockItemIdMap::getInstance();
 		$reflection = new ReflectionClass($blockItemIdMap);
