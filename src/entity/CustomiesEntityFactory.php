@@ -39,9 +39,23 @@ class CustomiesEntityFactory {
 		$packet = $property->getValue($instance);
 		/** @var CompoundTag $root */
 		$root = $packet->identifiers->getRoot();
-		($root->getListTag("idlist") ?? new ListTag())->push(CompoundTag::create()
+		$idlist = $root->getListTag("idlist");
+		if ($idlist === null) {
+			$idlist = new ListTag();
+			$root->setTag("idlist", $idlist);
+		}
+
+		$maxRuntimeId = -1;
+		foreach ($idlist->getValue() as $childTag) {
+			if ($childTag instanceof CompoundTag) {
+				$maxRuntimeId = max($childTag->getInt("rid", 0), $maxRuntimeId);
+			}
+		}
+
+		$idlist->push(CompoundTag::create()
 			->setString("id", $identifier)
-			->setString("bid", $behaviourId));
+			->setString("bid", $behaviourId)
+			->setInt("rid", $maxRuntimeId + 1));
 		$packet->identifiers = new CacheableNbt($root);
 	}
 }
